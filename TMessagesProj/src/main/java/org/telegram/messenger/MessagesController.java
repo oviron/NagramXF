@@ -21924,6 +21924,7 @@ public class MessagesController extends BaseController implements NotificationCe
                 e.printStackTrace();
             }
             int newUnreadCount = 0;
+            boolean alreadyRead = false;
             for (int i = 0; i < unreadReactions.size(); i++) {
                 int messageId = unreadReactions.keyAt(i);
                 boolean hasUnreadReaction = unreadReactions.valueAt(i);
@@ -21931,6 +21932,8 @@ public class MessagesController extends BaseController implements NotificationCe
                     if (reactionsMentionsMessageIds.get(messageId) != hasUnreadReaction) {
                         newUnreadCount += hasUnreadReaction ? 1 : -1;
                         changed = true;
+                    } else if (!hasUnreadReaction) {
+                        alreadyRead = true;
                     }
                 } else {
                     needReload = true;
@@ -21961,6 +21964,24 @@ public class MessagesController extends BaseController implements NotificationCe
                     }
                 } catch (SQLiteException e) {
                     e.printStackTrace();
+                }
+            }
+            // Viewing a message locally clears its row without touching the dialog counter, so the read
+            // update arriving later from another session can no longer lower it: recount on the server.
+            if (isReactions && alreadyRead && !needReload && topicId == 0 && dialogId > 0) {
+                try {
+                    SQLiteCursor cursor = getMessagesStorage().getDatabase().queryFinalized(String.format(Locale.US, "SELECT unread_reactions FROM dialogs WHERE did = %d", dialogId));
+                    if (cursor.next()) {
+                        needReload = cursor.intValue(0) > 0;
+                    }
+                    cursor.dispose();
+                } catch (SQLiteException e) {
+                    e.printStackTrace();
+                }
+                // Apply the known delta first, so it survives a failed recount.
+                if (needReload && changed) {
+                    checkUnreadReactionsInternal2(dialogId, topicId, false, true, newUnreadCount, newUnreadMessages);
+                    changed = false;
                 }
             }
             if (isReactions) {
